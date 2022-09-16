@@ -1,0 +1,179 @@
+service: ${self:custom.general.serviceName}
+
+frameworkVersion: '3'
+
+configValidationMode: error
+
+variablesResolutionMode: 20210326
+
+plugins:
+  - serverless-iam-roles-per-function
+  - serverless-scriptable-plugin
+
+package:
+  individually: true
+  patterns:
+    - "!./**"
+
+provider:
+  name: aws
+  region: ${self:custom.general.region}
+  lambdaHashingVersion: 20201221
+  stage: ${opt:stage, 'dev'}
+  logs:
+    httpApi: true
+  deploymentBucket:
+    tags:
+      'Project': ${self:service}
+
+functions:
+  slackbot:
+    name: ${self:custom.functions.slackbot.name}
+    package:
+      patterns:
+        - "!../../functions/slackbot/**"
+        - "../../functions/slackbot/src/**"
+        - "../../functions/slackbot/package.json"
+        - "../../functions/slackbot/package-lock.json"
+    handler: functions/slackbot/src/index.handler
+    runtime: nodejs16.x
+    memorySize: 128
+    maximumEventAge: 21600
+    maximumRetryAttempts: 2
+    timeout: 28
+    layers:
+      - { Ref: SlackbotLambdaLayer }
+    iamRoleStatementsName: ${self:custom.functions.slackbot.name}-role
+    iamRoleStatements:
+      - Effect: 'Allow'
+        Action:
+          - 'sqs:SendMessage'
+        Resource:
+          - ${self:custom.sqs.messagesToBeAnalyzedQueue.arn}
+    environment:
+      AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+      SLACK_SIGNING_SECRET: ${ssm:/${self:service}/${self:provider.stage}/functions/slackbot/env-variables/SLACK_SIGNING_SECRET}
+      SLACK_BOT_TOKEN: ${ssm:/${self:service}/${self:provider.stage}/functions/slackbot/env-variables/SLACK_BOT_TOKEN}
+      SENTIMENT_ANALYSIS_SQS_QUEUE__REGION: ${self:provider.region}
+      SENTIMENT_ANALYSIS_SQS_QUEUE__URI: ${self:custom.sqs.messagesToBeAnalyzedQueue.queueUrl}
+    events:
+      - httpApi:
+          path: /slack/events
+          method: post
+      - httpApi:
+          path: /my-name-is
+          method: get
+  sentiment-analysis:
+    name: ${self:custom.functions.sentimentAnalysis.name}
+    package:
+      patterns:
+        - "!../../functions/sentiment-analysis/**"
+        - "../../functions/sentiment-analysis/src/**"
+        - "../../functions/sentiment-analysis/package.json"
+        - "../../functions/sentiment-analysis/package-lock.json"
+    handler: functions/sentiment-analysis/src/index.handler
+    runtime: nodejs16.x
+    memorySize: 256
+    maximumEventAge: 21600
+    maximumRetryAttempts: 2
+    timeout: 120
+    layers:
+      - { Ref: SentimentAnalysisLambdaLayer }
+    iamRoleStatementsName: ${self:custom.functions.sentimentAnalysis.name}-role
+    iamRoleStatements:
+      - Effect: 'Allow'
+        Action:
+          - 's3:PutObject'
+          - 's3:PutObjectTagging'
+        Resource:
+          - "arn:aws:s3:::${self:custom.s3.storeResultsS3Bucket.name}/*"
+      - Effect: 'Allow'
+        Action:
+          - 'sqs:ReceiveMessage'
+          - 'sqs:GetQueueAttributes'
+          - 'sqs:DeleteMessage'
+        Resource:
+          - ${self:custom.sqs.messagesToBeAnalyzedQueue.arn}
+    environment:
+      S3_BUCKET_NAME__ANALYSIS_RESULTS: ${self:custom.s3.storeResultsS3Bucket.name}
+      S3_BUCKET_REGION__ANALYSIS_RESULTS: ${self:provider.region}
+      STORE_SLACK_MESSAGES_CONTENT_AFTER_ANALYSIS_STATUS: ${file(./serverlessSettings.js):getStoreSlackMessageContentAfterAnalysis}
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - messagesToBeAnalyzedQueue
+              - Arn
+          batchSize: 1
+          maximumBatchingWindow: 1
+          
+layers:
+  Slackbot:
+    name: ${self:custom.functions.slackbot.name}-layer
+    description: "The layer for the ${self:custom.functions.slackbot.name} lambda function in the ${self:provider.stage} environment."
+    package:
+      artifact: ../../functions/slackbot/${self:custom.functions.slackbot.layerNameZip}
+    compatibleRuntimes:
+      - nodejs16.x
+    retain: false
+  SentimentAnalysis:
+    name:  ${self:custom.functions.sentimentAnalysis.name}-layer
+    description: "The layer for the ${self:custom.functions.sentimentAnalysis.name} lambda function in the ${self:provider.stage} environment."
+    package:
+      artifact: ../../functions/sentiment-analysis/${self:custom.functions.sentimentAnalysis.layerNameZip}
+    compatibleRuntimes:
+      - nodejs16.x
+    retain: false
+
+resources:
+  Resources:
+    messagesToBeAnalyzedQueue:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: ${self:custom.sqs.messagesToBeAnalyzedQueue.name}
+        VisibilityTimeout: 120
+    storeResultsS3Bucket:
+      Type: "AWS::S3::Bucket"
+      Properties:
+        BucketName: ${self:custom.s3.storeResultsS3Bucket.name}
+        AccessControl: Private
+
+custom:
+  general:
+    serviceName: ${file(./serverlessSettings.js):getServiceName}
+    region: ${file(./serverlessSettings.js):getRegion}
+  functions:
+    slackbot:
+      name: ${self:provider.stage}-${self:service}-slackbot
+      layerNameZip: ${self:custom.functions.slackbot.name}.lambda-layer.zip
+    sentimentAnalysis:
+      name: ${self:provider.stage}-${self:service}-sentimentAnalysis
+      layerNameZip: ${self:custom.functions.sentimentAnalysis.name}.lambda-layer.zip
+  sqs:
+    messagesToBeAnalyzedQueue:
+      name: ${self:provider.stage}-${self:service}-messagesToBeAnalyzedQueue
+      arn: 
+        Fn::GetAtt: [ messagesToBeAnalyzedQueue, Arn ]
+      queueUrl: 
+        Fn::GetAtt: [ messagesToBeAnalyzedQueue, QueueUrl ]
+  s3:
+    storeResultsS3Bucket:
+      name: ${self:provider.stage}-${self:service}-${file(./serverlessSettings.js):getS3StoreResultsBucketSuffix}
+  scriptable:
+    commands:
+      prepare-layer-zip-lambda-slackbot:
+        - (cd ../../functions/slackbot/ && rm -rf node_modules)
+        - (cd ../../functions/slackbot/ && npm install --omit=dev)
+        - (cd ../../functions/slackbot/ && rm -rf nodejs)
+        - (cd ../../functions/slackbot/ && mkdir nodejs)
+        - (cd ../../functions/slackbot/ && mv node_modules nodejs)
+        - (cd ../../functions/slackbot/ && zip -q -r ${self:custom.functions.slackbot.layerNameZip} nodejs)
+        - (cd ../../functions/slackbot/ && rm -rf nodejs)
+      prepare-layer-zip-lambda-sentiment-analysis:
+        - (cd ../../functions/sentiment-analysis/ && rm -rf node_modules)
+        - (cd ../../functions/sentiment-analysis/ && npm install --omit=dev)
+        - (cd ../../functions/sentiment-analysis/ && rm -rf nodejs)
+        - (cd ../../functions/sentiment-analysis/ && mkdir nodejs)
+        - (cd ../../functions/sentiment-analysis/ && mv node_modules nodejs)
+        - (cd ../../functions/sentiment-analysis/ && zip -q -r ${self:custom.functions.sentimentAnalysis.layerNameZip} nodejs)
+        - (cd ../../functions/sentiment-analysis/ && rm -rf nodejs)

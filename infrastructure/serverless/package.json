@@ -1,0 +1,7 @@
+{
+  "devDependencies": {
+    "serverless": "3.22.0",
+    "serverless-iam-roles-per-function": "3.2.0",
+    "serverless-scriptable-plugin": "1.2.2"
+  }
+}

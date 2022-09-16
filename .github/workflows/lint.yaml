@@ -1,0 +1,21 @@
+name: Linting
+
+on:
+  - pull_request
+
+jobs:
+  linting:
+    name: "Linting"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: "Function: slackbot | Lint"
+        working-directory: ./functions/slackbot
+        run: |
+          npm install
+          npx eslint .
+      - name: "Function: sentiment-analysis | Lint"
+        working-directory: ./functions/sentiment-analysis
+        run: |
+          npm install
+          npx eslint .

@@ -1,0 +1,221 @@
+name: Test or Deploy or Remove
+
+on:
+  workflow_dispatch:
+      inputs:
+        job-to-run:
+          type: choice
+          description: "Which job to run?"
+          required: true       
+          options:
+            - "testing-and-linting"
+            - "deploy-full-serverless-stack"
+            - "remove-serverless-stack"
+        environment:
+          description: 'Environment'     
+          required: true
+          default: 'dev'
+
+jobs:
+  general-variables: 
+    name: "Prepare general variables"
+    runs-on: ubuntu-latest
+    outputs:
+      AWS_ACCOUNT_ID: ${{ steps.set-variables.outputs.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ steps.set-variables.outputs.AWS_REGION }}
+      STACK_VERSION: ${{ steps.set-variables.outputs.STACK_VERSION }}
+      ENVIRONMENT: ${{ steps.set-variables.outputs.ENVIRONMENT }}
+      GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME: ${{ steps.set-variables.outputs.GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME }}
+      GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME: ${{ steps.set-variables.outputs.GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME }}
+    steps: 
+      - uses: actions/checkout@v3
+      - name: "Set variables"
+        id: set-variables
+        run: |
+          GENERAL_CONFIGURATION_FILE=$(cat ".configuration/env-configuration/${{ github.event.inputs.environment }}.general-configuration.json")
+          
+          echo "::set-output name=AWS_ACCOUNT_ID::`echo $(jq -r ".COMMON.AWS_ACCOUNT_ID" <<< "$GENERAL_CONFIGURATION_FILE")`"
+          echo "::set-output name=AWS_REGION::`echo $(jq -r ".COMMON.AWS_REGION" <<< "$GENERAL_CONFIGURATION_FILE")`"
+          echo "::set-output name=STACK_VERSION::`echo $(jq -r ".COMMON.STACK_VERSION" <<< "$GENERAL_CONFIGURATION_FILE")`"
+          echo "::set-output name=ENVIRONMENT::${{ github.event.inputs.environment }}"
+          
+          GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME=${{ github.event.inputs.environment }}_"AWS_ACCESS_KEY_ID"
+          GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME="${GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME^^}"
+          echo "::set-output name=GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME::`echo $GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME`"
+          
+          GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME=${{ github.event.inputs.environment }}_"AWS_SECRET_ACCESS_KEY"
+          GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME="${GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME^^}"
+          echo "::set-output name=GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME::`echo $GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME`"
+          
+          echo "General Configuration file"
+          echo $GENERAL_CONFIGURATION_FILE
+
+  testing-and-linting:
+    name: "Testing & Linting"
+    if: ${{ (github.event.inputs.job-to-run == 'testing-and-linting') || (github.event.inputs.job-to-run == 'deploy-full-serverless-stack') }}
+    needs: general-variables
+    runs-on: ubuntu-latest
+    services:
+      localstack:
+        image: localstack/localstack
+        env:
+          DEFAULT_REGION: us-east-1
+          DATA_DIR: /tmp/localstack/data
+        ports: ["4566:4566"]
+    steps:
+      - uses: actions/checkout@v3
+      - name: "Prepare localstack infrastructure"
+        working-directory: ./infrastructure/localstack/startup-scripts
+        run: |
+          chmod +x 01.aws-cli-configure-profile.sh
+          chmod +x 02.create-sqs-queues.sh
+          chmod +x 03.create-s3-buckets.sh
+          bash ./01.aws-cli-configure-profile.sh
+          bash ./02.create-sqs-queues.sh
+          bash ./03.create-s3-buckets.sh
+        shell: bash
+      - name: "Function: slackbot | Lint & Run tests"
+        working-directory: ./functions/slackbot
+        run: |
+          npm install
+          npx eslint .
+          npm run test:simple
+      - name: "Function: sentiment-analysis | Lint & Run tests"
+        working-directory: ./functions/sentiment-analysis
+        run: |
+          npm install
+          npx eslint .
+          npm run test:simple
+
+  deploy-full-serverless-stack:
+    name: "Deploy stack"
+    if: ${{ github.event.inputs.job-to-run == 'deploy-full-serverless-stack' }}
+    needs: 
+      - general-variables
+      - testing-and-linting
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets[needs.general-variables.outputs.GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME] }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets[needs.general-variables.outputs.GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME] }}
+      AWS_ACCOUNT_ID: ${{ needs.general-variables.outputs.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ needs.general-variables.outputs.AWS_REGION }}
+      ENVIRONMENT: ${{ needs.general-variables.outputs.ENVIRONMENT }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+      - name: "Show general configuration"
+        run: |
+          echo "Account ID: ${{ env.AWS_ACCOUNT_ID }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+      - name: "Configure AWS credentials"
+        run: |
+          mkdir -p ~/.aws
+          touch ~/.aws/config
+          echo "
+          [profile slenti-serverless-deployment]
+          aws_access_key_id=${{ env.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}
+          region=${{ env.AWS_REGION }}
+          " > ~/.aws/config
+      - name: "Export AWS profile"
+        run: |
+          export AWS_PROFILE=slenti-serverless-deployment
+      - name: "AWS - Get caller identity"
+        run: |
+          aws sts get-caller-identity
+      - name: "Install dependencies in the infrastructure/serverless folder."
+        working-directory: ./infrastructure/serverless
+        run: |
+          npm install
+      - name: "Function: slackbot | Create layers"
+        working-directory: ./infrastructure/serverless
+        run: |
+          AWS_SDK_LOAD_CONFIG=1 npx serverless prepare-layer-zip-lambda-slackbot --verbose --stage=${{ env.ENVIRONMENT }} --aws-profile=slenti-serverless-deployment
+      - name: "Function: sentiment-analysis | Create layers"
+        working-directory: ./infrastructure/serverless
+        run: |
+          AWS_SDK_LOAD_CONFIG=1 npx serverless prepare-layer-zip-lambda-sentiment-analysis --verbose --stage=${{ env.ENVIRONMENT }} --aws-profile=slenti-serverless-deployment
+      - name: "Get information about the stack if it's deployed."
+        working-directory: ./infrastructure/serverless
+        run: |
+          set +e
+          GET_INFO_FOR_STACK=$(AWS_SDK_LOAD_CONFIG=1 npx serverless info --verbose --stage=${{ env.ENVIRONMENT }} --aws-profile=slenti-serverless-deployment 2>&1)
+          # grep -q exit codes:
+          # - 0: a line is selected
+          # - 1: no lines are selected
+          # - 2: an error occurred
+          echo $GET_INFO_FOR_STACK | grep -q "does not exist"
+          CHECK_IF_SERVERLESS_STACK_EXISTS=$?
+          if [[ $CHECK_IF_SERVERLESS_STACK_EXISTS -eq 0 ]]; then
+            echo "This is the first time that this stack is getting deployed."
+          else
+            echo $GET_INFO_FOR_STACK
+          fi
+          set -e
+      - name: "Deploy stack"
+        working-directory: ./infrastructure/serverless
+        run: |
+          AWS_SDK_LOAD_CONFIG=1 npx serverless deploy --verbose --stage=${{ env.ENVIRONMENT }} --aws-profile=slenti-serverless-deployment
+
+  remove-serverless-stack:
+    name: "Remove stack"
+    if: ${{ github.event.inputs.job-to-run == 'remove-serverless-stack' }}
+    needs: 
+      - general-variables
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets[needs.general-variables.outputs.GITHUB_SECRET__AWS_ACCESS_KEY_ID__NAME] }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets[needs.general-variables.outputs.GITHUB_SECRET__AWS_SECRET_ACCESS_KEY__NAME] }}
+      AWS_ACCOUNT_ID: ${{ needs.general-variables.outputs.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ needs.general-variables.outputs.AWS_REGION }}
+      ENVIRONMENT: ${{ needs.general-variables.outputs.ENVIRONMENT }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+      - name: "Show general configuration"
+        run: |
+          echo "Account ID: ${{ env.AWS_ACCOUNT_ID }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+      - name: "Configure AWS credentials"
+        run: |
+          mkdir -p ~/.aws
+          touch ~/.aws/config
+          echo "
+          [profile slenti-serverless-deployment]
+          aws_access_key_id=${{ env.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}
+          region=${{ env.AWS_REGION }}
+          " > ~/.aws/config
+      - name: "Export AWS profile"
+        run: |
+          export AWS_PROFILE=slenti-serverless-deployment
+      - name: "AWS - Get caller identity"
+        run: |
+          aws sts get-caller-identity
+      - name: "Install dependencies in the infrastructure/serverless folder."
+        working-directory: ./infrastructure/serverless
+        run: |
+          npm install
+      - name: "Remove stack if it's deployed."
+        working-directory: ./infrastructure/serverless
+        run: |
+          set +e
+          GET_INFO_FOR_STACK=$(AWS_SDK_LOAD_CONFIG=1 npx serverless info --verbose --stage=${{ env.ENVIRONMENT }} --aws-profile=slenti-serverless-deployment 2>&1)
+          # grep -q exit codes:
+          # - 0: a line is selected
+          # - 1: no lines are selected
+          # - 2: an error occurred
+          echo $GET_INFO_FOR_STACK | grep -q "does not exist"
+          CHECK_IF_SERVERLESS_STACK_EXISTS=$?
+          set -e
+          if [[ $CHECK_IF_SERVERLESS_STACK_EXISTS -eq 0 ]]; then
+            echo "The stack you are trying to remove doesn't exist."
+          else
+            AWS_SDK_LOAD_CONFIG=1 npx serverless remove --verbose --stage=${{ env.ENVIRONMENT }} --aws-profile=slenti-serverless-deployment
+          fi

@@ -1,0 +1,28 @@
+{
+  "name": "slenti--slackbot",
+  "version": "1.0.0",
+  "description": "More information is available in the READMEs.",
+  "main": "src/index.js",
+  "scripts": {
+    "lint": "npx eslint .",
+    "test:simple": "npx jest",
+    "test:localstack": "docker-compose -f ../../infrastructure/localstack/docker-compose.yml up -d && node -e \"console.log('Currently preparing the container. Wait for 20 seconds...'); setTimeout(()=>{},20000)\" && npx jest"
+  },
+  "author": {
+    "name": "Thodoris Itsios",
+    "url": "https://itsios.eu/"
+  },
+  "engines": {
+    "node": "16.x"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@slack/bolt": "3.11.0",
+    "@vendia/serverless-express": "4.5.4",
+    "aws-sdk": "2.1157.0"
+  },
+  "devDependencies": {
+    "eslint": "8.22.0",
+    "jest": "28.1.1"
+  }
+}

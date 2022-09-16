@@ -1,0 +1,30 @@
+{
+  "name": "slenti--sentiment-analysis",
+  "version": "1.0.0",
+  "description": "More information is available in the READMEs.",
+  "main": "src/index.js",
+  "scripts": {
+    "lint": "npx eslint .",
+    "test:simple": "npx jest",
+    "test:localstack": "docker-compose -f ../../infrastructure/localstack/docker-compose.yml up -d && node -e \"console.log('Currently preparing the container. Wait for 20 seconds...'); setTimeout(()=>{},20000)\" && npx jest"
+  },
+  "author": {
+    "name": "Thodoris Itsios",
+    "url": "https://itsios.eu/"
+  },
+  "engines": {
+    "node": "16.x"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ajv": "8.11.0",
+    "ajv-errors": "3.0.0",
+    "aws-sdk": "2.1188.0",
+    "classificator": "0.3.4",
+    "md5": "2.3.0"
+  },
+  "devDependencies": {
+    "eslint": "8.22.0",
+    "jest": "27.5.1"
+  }
+}

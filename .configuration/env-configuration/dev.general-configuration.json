@@ -1,0 +1,25 @@
+{
+    "COMMON": {
+        "STACK_VERSION": "1.0.0",
+        "PROJECT_NAME": "Slenti",
+        "AWS_ACCOUNT_ID": "THE-ID-OF-YOUR-AWS-ACCOUNT",
+        "AWS_REGION": "THE-REGION"
+    },
+    "INFRASTRUCTURE": {
+        "SERVERLESS": {
+            "SERVICE": {
+                "NAME": "slenti"
+            },
+            "FUNCTIONS": {
+                "SENTIMENT_ANALYSIS": {
+                    "STORE_MESSAGE_CONTENT_AFTER_ANALYSIS": "false"
+                }
+            },
+            "S3": {
+                "STORE_RESULTS_BUCKET": {
+                    "SUFFIX": "THE-SUFFIX"
+                }
+            }
+        }
+    }
+}

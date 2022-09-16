@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  localstack:
+    container_name: "${LOCALSTACK_DOCKER_NAME-slentiv1_infra_main}"
+    image: localstack/localstack
+    network_mode: bridge
+    environment:
+      - DEBUG=0
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./startup-scripts:/docker-entrypoint-initaws.d
+      - /var/run/docker.sock:/var/run/docker.sock
