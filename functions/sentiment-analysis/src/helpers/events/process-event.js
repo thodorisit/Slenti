@@ -19,7 +19,7 @@ const md5 = require("md5");
  * testing purposes.
  * 
  * The schema of the event is available in the
- * `./process-event.spec.js`.
+ * `./process-event.schemas.js`.
  * Tha schema validates only the required attributes
  * that we are interested in.
  */

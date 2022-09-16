@@ -3,7 +3,7 @@ const { schema_uploadFile_validate } = require("./upload-file.schemas.js");
 
 /**
  * The schema of the objectParam is available in the
- * `./upload-file.spec.js`.
+ * `./upload-file.schemas.js`.
  */
 async function uploadFile(objectParam) {
     const schemaValidation = schema_uploadFile_validate(objectParam);
